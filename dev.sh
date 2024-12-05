@@ -2,4 +2,4 @@
 
 source creds.sh
 
-find . -name '*.janet' | entr -c janet src/main.janet
+find . -name '*.janet' | entr -c janet src/main.janet Lead

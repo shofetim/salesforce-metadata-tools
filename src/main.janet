@@ -2,8 +2,14 @@
 (import spork/misc)
 (import salesforce)
 
+(var- url
+      (->> (get (os/environ) "SF_URL")
+           (string/replace "https://" "")
+           (string/split ".")
+           (first)))
+
 (defn- cache/name [key]
-  (let [prefix "./src/data/"
+  (let [prefix (string/format "./src/data/%s." url)
         postfix ".cache"]
     (string prefix key postfix)))
 
@@ -11,7 +17,7 @@
   "Get key age in hours"
   [key]
   (let [now (os/time)
-        last-modified (or (os/stat (name key) :modified) 0)
+        last-modified (or (os/stat (cache/name key) :modified) 0)
         hour (* 60 60)]
     (/ (- now last-modified) hour)))
 
@@ -20,7 +26,7 @@
   [key value]
   (let [out (dyn *out*)
         fmt (dyn :pretty-format)
-        filename (name key)
+        filename (cache/name key)
         file (file/open filename :w)]
     (setdyn *out* file)
     (setdyn :pretty-format "%.40n")
@@ -32,7 +38,7 @@
 (defn- cache/retrieve
   "Retrieve value by key"
   [key]
-  (let [filename (name key)]
+  (let [filename (cache/name key)]
     (when (os/stat filename)
       (parse (slurp filename)))))
 
@@ -126,7 +132,7 @@
     (print "Usage: cli.janet SF_OBJECT_NAME i.e. `janet cli.janet Lead`")
     (break))
   (set object-name (get args 1))
-  (set metadata (meta/describe object-name))
+  (set metadata (describe object-name))
   (setup-search-data)
   (greeting)
   (while true (prompt)))
