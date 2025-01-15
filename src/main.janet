@@ -1,138 +1,74 @@
-(import spork/getline)
 (import spork/misc)
-(import salesforce)
+(import salesforce :as sf)
+(import ./db)
+(import ./util)
 
-(var- url
-      (->> (get (os/environ) "SF_URL")
-           (string/replace "https://" "")
-           (string/split ".")
-           (first)))
+(def- properties-we-care-about
+  ["calculatedFormula" "precision" "scale" "calculated"
+   "extraTypeInfo" "digits" "length" "referenceTo" "autoNumber"
+   "nameField" "picklistValues" "defaultValue" "type" "inlineHelpText"
+   "name" "label"])
 
-(defn- cache/name [key]
-  (let [prefix (string/format "./src/data/%s." url)
-        postfix ".cache"]
-    (string prefix key postfix)))
+(defn- sf-list-objects []
+  (let [objects (filter
+                 (fn [{"deprecatedAndHidden" deprecatedAndHidden "isInterface" isInterface
+                       "layoutable" layoutable "queryable" queryable "retrieveable" retrieveable
+                       "searchable" searchable "triggerable" triggerable }]
+                   (and (= deprecatedAndHidden false)
+                        (= isInterface false)
+                        (= layoutable true)
+                        (= queryable true)
+                        (= retrieveable true)
+                        (= searchable true)
+                        (= triggerable true)))
+                 ((sf/describe-all) "sobjects"))]
+    (map (fn [{"label" label "name" name}] {:label label :name name}) objects)))
 
-(defn- cache/age
-  "Get key age in hours"
-  [key]
-  (let [now (os/time)
-        last-modified (or (os/stat (cache/name key) :modified) 0)
-        hour (* 60 60)]
-    (/ (- now last-modified) hour)))
+(defn sf-object-fields [name]
+  (let [res (sf/describe name)]
+    (map |(misc/select-keys $ properties-we-care-about) (res "fields"))))
 
-(defn- cache/store
-  "Store a value under key"
-  [key value]
-  (let [out (dyn *out*)
-        fmt (dyn :pretty-format)
-        filename (cache/name key)
-        file (file/open filename :w)]
-    (setdyn *out* file)
-    (setdyn :pretty-format "%.40n")
-    (pp value)
-    (file/close file)
-    (setdyn *out* out)
-    (setdyn :pretty-format fmt)))
+(defn all-fields []
+  (let [org (db/get-org)
+        objects (db/get-all-objects (org :id))]
+    (each object objects
+      (map |(print (util/format-field (object :name) ($ :name)))
+           (db/get-object-fields (object :id))))))
 
-(defn- cache/retrieve
-  "Retrieve value by key"
-  [key]
-  (let [filename (cache/name key)]
-    (when (os/stat filename)
-      (parse (slurp filename)))))
+(defn- fetch []
+  (when (db/get-org) (db/delete-org))
+  (db/save-org)
+  (each object (sf-list-objects)
+    (db/save object (sf-object-fields (object :name)))))
 
-(defn- describe
-  "Retrieve metadata for an object"
-  [object-name]
-  (let [caching-duration-hours 24
-        age (cache/age object-name)
-        data (cache/retrieve object-name)]
-    (if (and (< age caching-duration-hours) data)
-      data
-      (do
-        (cache/store object-name (salesforce/describe object-name))
-        (describe object-name)))))
+(defn- last-synced [] (print (get (db/get-org) :synced "Never Synced")))
 
-(var object-name nil)
-(var metadata nil)
-(var search-data @{})
+(defn- field [field-name]
+  (let [field (db/get-field (string/slice field-name 1))
+        object (db/get-object (field :object))
+        {:name name :label label :type type
+         :inlineHelpText inlineHelpText :picklistValues picklistValues} field]
+    (printf `%s
+              Name: %s
+              Label: %s
+              Type: %s
+              Help Text: %s
+              Picklist Values: %s`
+            (object :name) name label type inlineHelpText picklistValues)))
 
-(defn normalize
-  [str]
-  (string/replace-all "_" "" (string/ascii-lower str)))
+(defn- help []
+  (printf `sfmt help — This help text
+          sfmt last-synced — Get the date the last time we synced metadata for this org
+          sfmt fetch — Fetch metadata and update local cache
+          sfmt all-fields — List all fields
+          sfmt field FIELDNAME — details for fields`))
 
-(defn setup-search-data []
-  (set search-data
-       (reduce
-         (fn [acc el] (put acc (normalize (el "name")) el))
-         @{} (get metadata "fields"))))
-
-(def properties-we-care-about
-  [
-   # "calculatedFormula"
-   # "precision"
-   # "scale"
-   # "calculated"
-   # "extraTypeInfo"
-   # "nillable"
-   # "digits"
-   # "createable"
-   # "length"
-   # "referenceTo"
-   # "autoNumber"
-   # "nameField"
-   "picklistValues"
-   "defaultValue"
-   "type"
-   "inlineHelpText"
-   "name"
-   "label"
-  ])
-
-(defn format-picklist-values
-  [vals]
-  (string/join
-   (map |($ "label") (filter |($ "active") vals))
-   ", "))
-
-(defn details
-  [field-name]
-  (let [field (search-data (normalize field-name))
-        metadata (misc/select-keys field properties-we-care-about)]
-    (put metadata "picklistValues"
-         (format-picklist-values (metadata "picklistValues")))
-    (misc/print-table [metadata])))
-
-(defn search
-  [field-name]
-  (let [needle (normalize field-name)
-        haystack (keys search-data)
-        matching-keys (if (empty? needle)
-                        haystack
-                        (filter |(string/find needle $) haystack))]
-    (map |(print ((search-data $) "name")) matching-keys)))
-
-(defn prompt []
-  (let [input (string/trim (getline ""))]
-    (if (string/has-prefix? ">" input)
-      (details (string/trim (string/slice input 1)))
-      (search input))))
-
-(defn greeting []
-  (print
-   `Begin typing the field name, and then hit enter. Possible
-   matches will be returned. To inspect one of the matches type >
-   followed by the field name. To search again type a partial field
-   name. ctrl-c to exit.`))
-
-(defn main
-  [& args]
-  (when (nil? (get args 1))
-    (print "Usage: cli.janet SF_OBJECT_NAME i.e. `janet cli.janet Lead`")
-    (break))
-  (set object-name (get args 1))
-  (set metadata (describe object-name))
-  (setup-search-data)
-  (greeting)
-  (while true (prompt)))
+(defn main [& args]
+  (db/open)
+  (case (get args 1)
+    "last-synced" (last-synced)
+    "fetch" (fetch)
+    "all-fields" (all-fields)
+    "field" (field (get args 2))
+    (help))
+  (db/close))

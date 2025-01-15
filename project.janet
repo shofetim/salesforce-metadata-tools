@@ -1,8 +1,9 @@
 (declare-project
-  :name "Salesforce Inspector"
-  :description "CLI tool to inspect SF data model"
+  :name "Salesforce Metadata Tools"
+  :description "CLI tool for SF metadata"
   :dependencies ["https://github.com/janet-lang/spork"
-                 "https://github.com/shofetim/salesforce"]
+                 "https://github.com/shofetim/salesforce"
+                 "https://github.com/shofetim/sqlite3"]
   :author "Jordan Schatz"
   :license "ISC"
   :version "0.1"
@@ -10,5 +11,5 @@
   :repo "https://github.com/shofetim/salesforce-inspector")
 
 (declare-executable
-  :name "sf-inspect"
+  :name "sfmt"
   :entry "src/main.janet")
